@@ -1,0 +1,25 @@
+{
+    "domainName": "images.anuv.me",
+    "apiDomainName": "images-api.anuv.me",
+    "runpodsEndpoint": "https://api.runpod.ai/v2/dwnuhmsa3bqb22",
+    "stackNamePrefix": "image-gen",
+    "awsAccountId": "738123590383",
+    "awsWebsiteBucketPrefix": "image-gen-website",
+    "awsOutputBucketPrefix": "image-gen-output",
+    "awsInputBucketPrefix": "image-gen-input",
+    "frontendRepo": "anuvgupta/image-gen-frontend",
+    "throttlingConfig": {
+        "generationTimeSeconds": 5,
+        "statusPollIntervalSeconds": 2,
+        "imagesPerSession": 5,
+        "averageThinkTimeSeconds": 10,
+        "safetyFactorPercent": 10,
+        "burstTrafficMultiplier": 1.5,
+        "maxStatusCallsOnInit": 75,
+        "maxWorkers": 8
+    },
+    "tags": {
+        "Environment": "Development",
+        "Project": "ImageGen"
+    }
+}
