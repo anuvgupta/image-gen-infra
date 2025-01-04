@@ -1,0 +1,43 @@
+{
+    "name": "image-gen-infra",
+    "version": "1.0.0",
+    "description": "Infrastructure for image generation workers & frontend",
+    "license": "ISC",
+    "author": "Anuv Gupta",
+    "keywords": [],
+    "bin": {
+        "image-gen-infra": "dist/bin/image-gen-infra.js"
+    },
+    "scripts": {
+        "build": "tsc",
+        "watch": "tsc -w",
+        "test": "jest",
+        "cdk": "cdk",
+        "clean": "rm -rf dist && rm -rf cdk.out",
+        "deploy:dev": "./deploy.sh dev",
+        "deploy:prod": "./deploy.sh prod",
+        "bootstrap:dev": "./bootstrap.sh dev",
+        "bootstrap:prod": "./bootstrap.sh prod"
+    },
+    "devDependencies": {
+        "@types/jest": "^29.5.14",
+        "@types/node": "22.7.9",
+        "aws-cdk": "2.173.4",
+        "jest": "^29.7.0",
+        "ts-jest": "^29.2.5",
+        "ts-node": "^10.9.2",
+        "typescript": "~5.6.3"
+    },
+    "dependencies": {
+        "aws-cdk-lib": "^2.173.4",
+        "constructs": "^10.4.2"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anuvgupta/image-gen-infra.git"
+    },
+    "bugs": {
+        "url": "https://github.com/anuvgupta/image-gen-infra/issues"
+    },
+    "homepage": "https://github.com/anuvgupta/image-gen-infra#readme"
+}
