@@ -1,0 +1,13 @@
+{
+    "domainName": "images-dev.anuv.me",
+    "runpodsEndpoint": "https://api.runpod.ai/v2/bz5tarexkvylim",
+    "stackNamePrefix": "image-gen",
+    "awsAccountId": "738123590383",
+    "awsWebsiteBucketPrefix": "image-gen-website",
+    "awsOutputBucketPrefix": "image-gen-output",
+    "frontendRepo": "anuvgupta/image-gen-frontend",
+    "tags": {
+        "Environment": "Development",
+        "Project": "ImageGen"
+    }
+}

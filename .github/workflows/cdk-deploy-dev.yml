@@ -1,0 +1,45 @@
+name: CDK Build and Deploy Infrastructure (Dev)
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+    repository_dispatch:
+        types: [frontend_source_updated]
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@v2
+
+            - name: Install jq
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y jq
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v2
+              with:
+                  node-version: "18"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Build
+              run: npm run build
+
+            - name: Deploy to AWS (Dev)
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+                  RUNPODS_API_KEY: ${{ secrets.RUNPODS_API_KEY }}
+                  AWS_REGION: ${{ secrets.AWS_REGION }}
+                  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  DEV_WEBSITE_USERNAME: ${{ secrets.DEV_WEBSITE_USERNAME }}
+                  DEV_WEBSITE_PASSWORD: ${{ secrets.DEV_WEBSITE_PASSWORD }}
+              run: |
+                  npm run bootstrap:dev
+                  npm run deploy:dev

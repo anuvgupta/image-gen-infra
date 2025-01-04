@@ -1,0 +1,18 @@
+# git ignore
+
+# system
+.DS_Store
+
+# node
+# *.js
+!jest.config.js
+*.d.ts
+node_modules
+
+# cdk asset staging directory
+.cdk.staging
+cdk.out
+dist
+
+# env
+.env*

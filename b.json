@@ -1,0 +1,19 @@
+{
+    "package": "image-gen-infra",
+    "targets": {
+        "build": "npm run build",
+        "clean": "npm run clean",
+        "install": "npm install",
+        "test": "npm run test",
+        "test-verbose": "npm run test-verbose",
+        "coverage": "npm run test-coverage",
+        "deploy-dev": "npm run deploy:dev",
+        "deploy-prod": "npm run deploy:prod",
+        "bootstrap-dev": "npm run bootstrap:dev",
+        "bootstrap-prod": "npm run bootstrap:prod",
+        "clean-deploy-dev": "npm run clean && npm install && npm run build && npm run bootstrap:dev && npm run deploy:dev",
+        "clean-deploy-prod": "npm run clean && npm install && npm run build && npm run bootstrap:prod && npm run deploy:prod",
+        "dd": "b clean-deploy-dev",
+        "dp": "b clean-deploy-prod"
+    }
+}
