@@ -107,19 +107,19 @@ if aws s3api head-bucket --bucket "${BUCKET_NAME}" 2>/dev/null; then
   echo "Successfully updated S3 bucket and commit hash tag"
 
   # Create CloudFront invalidation and wait for completion
-    echo "Creating CloudFront cache invalidation for distribution ${CLOUDFRONT_DISTRIBUTION_ID}"
-    INVALIDATION_ID=$(aws cloudfront create-invalidation \
-        --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
-        --paths "/*" \
-        --query 'Invalidation.Id' \
-        --output text)
+  echo "Creating CloudFront cache invalidation for distribution ${CLOUDFRONT_DISTRIBUTION_ID}"
+  INVALIDATION_ID=$(aws cloudfront create-invalidation \
+      --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+      --paths "/*" \
+      --query 'Invalidation.Id' \
+      --output text)
 
-    echo "Waiting for invalidation ${INVALIDATION_ID} to complete..."
-    aws cloudfront wait invalidation-completed \
-        --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
-        --id "${INVALIDATION_ID}"
+  echo "Waiting for invalidation ${INVALIDATION_ID} to complete..."
+  aws cloudfront wait invalidation-completed \
+      --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+      --id "${INVALIDATION_ID}"
 
-    echo "Successfully completed CloudFront invalidation"
+  echo "Successfully completed CloudFront invalidation"
 else
   echo "Bucket doesn't exist yet, skipping sync"
 fi

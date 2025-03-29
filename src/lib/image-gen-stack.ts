@@ -170,63 +170,99 @@ export class ImageGenStack extends cdk.Stack {
             ),
         });
 
-        /* CLOUDFRONT CDN - DEV ENVIRONMENT ACCESS */
-        // Create CloudFront Function for basic auth when in dev stage
-        let basicAuthFunction: cloudfront.Function | undefined;
-        let basicAuthFunctionAssociation: {} | undefined;
+        /* CLOUDFRONT CDN - URL REWRITES & DEV ENV ACCESS */
+        // Create CloudFront Function for url rewrites and basic auth when in dev stage
+        let viewerRequestFunction: cloudfront.Function | undefined;
         if (props.stageName === "dev") {
             // Base64 encode the credentials
             const credentials = Buffer.from(
                 `${props.devWebsiteUsername}:${props.devWebsitePassword}`
             ).toString("base64");
 
-            basicAuthFunction = new cloudfront.Function(
+            viewerRequestFunction = new cloudfront.Function(
                 this,
-                `BasicAuthFunction`,
+                `ViewerRequestFunction`,
                 {
                     code: cloudfront.FunctionCode.fromInline(`
-                    function handler(event) {
-                        var request = event.request;
-                        var headers = request.headers;
-                        
-                        // Check for Basic auth header
-                        if (!headers.authorization) {
-                            return {
-                                statusCode: 401,
-                                statusDescription: 'Unauthorized',
-                                headers: {
-                                    'www-authenticate': { value: 'Basic' }
-                                }
-                            };
-                        }
+                        function handler(event) {
+                            var request = event.request;
+                            var headers = request.headers;
+                            var uri = request.uri;
 
-                        // Verify credentials
-                        var authHeader = headers.authorization.value;
-                        var expectedHeader = 'Basic ${credentials}';
-                        
-                        if (authHeader !== expectedHeader) {
-                            return {
-                                statusCode: 401,
-                                statusDescription: 'Unauthorized',
-                                headers: {
-                                    'www-authenticate': { value: 'Basic' }
+                            /* Basic auth */
+                            // Check for Basic auth header
+                            if (!headers.authorization) {
+                                return {
+                                    statusCode: 401,
+                                    statusDescription: 'Unauthorized',
+                                    headers: {
+                                        'www-authenticate': { value: 'Basic' }
+                                    }
+                                };
+                            }
+                            // Verify credentials
+                            var authHeader = headers.authorization.value;
+                            var expectedHeader = 'Basic ${credentials}';
+                            if (authHeader !== expectedHeader) {
+                                return {
+                                    statusCode: 401,
+                                    statusDescription: 'Unauthorized',
+                                    headers: {
+                                        'www-authenticate': { value: 'Basic' }
+                                    }
+                                };
+                            }
+
+                            /* URL rewrites */
+                            // Only rewrite if not root or file
+                            if (uri !== '/' && !uri.includes('.')) {
+                                // Redirect /folder -> /folder/
+                                if (!uri.endsWith('/')) {
+                                    uri += '/';
                                 }
-                            };
+                                // Rewrite /folder/ -> /folder/index.html
+                                if (uri.endsWith('/')) {
+                                    uri += 'index.html';
+                                }
+                            }
+                            // Update request.uri
+                            request.uri = uri;
+                            
+                            return request;
                         }
-                        
-                        return request;
-                    }
-                `),
+                    `),
                 }
             );
-            basicAuthFunctionAssociation = {
-                functionAssociations: [
-                    {
-                        function: basicAuthFunction,
-                        eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
-                    },
-                ],
-            };
+        } else {
+            viewerRequestFunction = new cloudfront.Function(
+                this,
+                `ViewerRequestFunction`,
+                {
+                    code: cloudfront.FunctionCode.fromInline(`
+                        function handler(event) {
+                            var request = event.request;
+                            var uri = request.uri;
+
+                            /* URL rewrites */
+                            // Only rewrite if not root or file
+                            if (uri !== '/' && !uri.includes('.')) {
+                                // Redirect /folder -> /folder/
+                                if (!uri.endsWith('/')) {
+                                    uri += '/';
+                                }
+                                // Rewrite /folder/ -> /folder/index.html
+                                if (uri.endsWith('/')) {
+                                    uri += 'index.html';
+                                }
+                            }
+                            // Update request.uri
+                            request.uri = uri;
+
+                            return request;
+                        }
+                    `),
+                }
+            );
         }
 
         /* CLOUDFRONT CDN - CACHING POLICY */
@@ -261,13 +297,17 @@ export class ImageGenStack extends cdk.Stack {
                         cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                     allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
                     cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
-                    ...(props.stageName === "dev" &&
-                        basicAuthFunction &&
-                        basicAuthFunctionAssociation),
                     originRequestPolicy:
                         cloudfront.OriginRequestPolicy.CORS_S3_ORIGIN,
                     responseHeadersPolicy:
                         cloudfront.ResponseHeadersPolicy.CORS_ALLOW_ALL_ORIGINS,
+                    functionAssociations: [
+                        {
+                            function: viewerRequestFunction,
+                            eventType:
+                                cloudfront.FunctionEventType.VIEWER_REQUEST,
+                        },
+                    ],
                 },
                 additionalBehaviors: {
                     "/output/*": {
@@ -284,9 +324,13 @@ export class ImageGenStack extends cdk.Stack {
                         responseHeadersPolicy:
                             cloudfront.ResponseHeadersPolicy
                                 .CORS_ALLOW_ALL_ORIGINS,
-                        ...(props.stageName === "dev" &&
-                            basicAuthFunction &&
-                            basicAuthFunctionAssociation),
+                        functionAssociations: [
+                            {
+                                function: viewerRequestFunction,
+                                eventType:
+                                    cloudfront.FunctionEventType.VIEWER_REQUEST,
+                            },
+                        ],
                     },
                 },
                 priceClass:
