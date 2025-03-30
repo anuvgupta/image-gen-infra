@@ -4,6 +4,7 @@ import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as nodejs from "aws-cdk-lib/aws-lambda-nodejs";
@@ -14,9 +15,14 @@ import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+
 import { Construct } from "constructs";
 
 import { calculateTPS, TPSCalculationParams } from "../util/tps";
+
+const FIVE_MIB_BYTES = 5242880;
+const ALLOWED_UPLOAD_TYPES = ["image/png", "image/jpeg"];
+const ALLOWED_FILE_EXTENSIONS = "png|jpg|jpeg";
 
 interface ImageGenStackProps extends cdk.StackProps {
     stageName: string;
@@ -38,7 +44,7 @@ export class ImageGenStack extends cdk.Stack {
         super(scope, id, props);
 
         /* CONSTANTS */
-        const allowedOrigins = [`https://${props.domainName}`];
+        const allowedOrigin = `https://${props.domainName}`;
 
         /* SSL CERTIFICATES - CUSTOM DOMAINS */
         // Create SSL certificate for the domain
@@ -90,14 +96,15 @@ export class ImageGenStack extends cdk.Stack {
                 },
             ],
         });
-        // CORS for uploads
+        // Upload restriction - CORS origin
         inputBucket.addCorsRule({
             allowedMethods: [
                 s3.HttpMethods.PUT,
+                s3.HttpMethods.POST,
                 // s3.HttpMethods.GET,
                 // s3.HttpMethods.HEAD,
             ],
-            allowedOrigins: allowedOrigins,
+            allowedOrigins: [allowedOrigin],
             allowedHeaders: ["*"],
             exposedHeaders: ["ETag"],
             maxAge: 3000,
@@ -374,22 +381,7 @@ export class ImageGenStack extends cdk.Stack {
             }
         );
 
-        /* API GATEWAY - CORS */
-        const apiCorsConfig = {
-            allowOrigins: allowedOrigins,
-            allowMethods: ["GET", "POST"],
-            allowHeaders: [
-                "Content-Type",
-                "Authorization",
-                "X-Amz-Date",
-                "X-Amz-Security-Token",
-                "X-Api-Key",
-                "x-amz-content-sha256",
-            ],
-            allowCredentials: true,
-        };
-
-        /* API GATEWAY - UPLOAD URL LAMBDA */
+        /* LAMBDA - APIS */
         // Create Lambda function for generating pre-signed URLs
         const uploadUrlLambda = new nodejs.NodejsFunction(
             this,
@@ -402,6 +394,7 @@ export class ImageGenStack extends cdk.Stack {
                 handler: "main.handler",
                 environment: {
                     S3_BUCKET_NAME: inputBucket.bucketName,
+                    ALLOWED_ORIGIN: allowedOrigin,
                 },
                 bundling: {
                     minify: true,
@@ -424,7 +417,67 @@ export class ImageGenStack extends cdk.Stack {
             })
         );
 
+        /* API GATEWAY - CORS CONFIG */
+        const apiCorsConfig = {
+            allowOrigins: [allowedOrigin],
+            allowMethods: ["GET", "POST"],
+            allowHeaders: [
+                "Content-Type",
+                "Authorization",
+                "X-Amz-Date",
+                "X-Amz-Security-Token",
+                "X-Api-Key",
+                "x-amz-content-sha256",
+            ],
+            maxAge: cdk.Duration.minutes(10),
+            allowCredentials: true,
+        };
+        const getCORSResponseParametersForAPIGateway = () => {
+            return {
+                "Access-Control-Allow-Origin": `'${allowedOrigin}'`,
+                "Access-Control-Allow-Headers":
+                    "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,x-amz-content-sha256'",
+                "Access-Control-Allow-Methods": "'POST,OPTIONS'",
+                "Access-Control-Allow-Credentials": "'true'",
+            };
+        };
+        const getCORSResponseParametersForMethodResponse = () => {
+            return {
+                "method.response.header.Access-Control-Allow-Origin": true,
+                "method.response.header.Access-Control-Allow-Headers": true,
+                "method.response.header.Access-Control-Allow-Methods": true,
+                "method.response.header.Access-Control-Allow-Credentials": true,
+            };
+        };
+        const apiGatewayResponseTypes = [
+            { name: "Response400", type: apigateway.ResponseType.DEFAULT_4XX },
+            { name: "Response401", type: apigateway.ResponseType.DEFAULT_4XX },
+            { name: "Response403", type: apigateway.ResponseType.DEFAULT_4XX },
+            { name: "Response404", type: apigateway.ResponseType.DEFAULT_4XX },
+            { name: "Response429", type: apigateway.ResponseType.DEFAULT_4XX },
+            { name: "Response500", type: apigateway.ResponseType.DEFAULT_5XX },
+        ];
+        const apiGatewayStatusCodes = [
+            "200",
+            "204",
+            "400",
+            "401",
+            "403",
+            "404",
+            "405",
+            "429",
+            "500",
+        ];
+
         /* API GATEWAY - DEFINITION */
+        // Log group
+        const apiAccessLogGroup = new logs.LogGroup(
+            this,
+            "ApiGatewayAccessLogs",
+            {
+                retention: logs.RetentionDays.ONE_WEEK,
+            }
+        );
         const api = new apigateway.RestApi(this, "ImageGenApi", {
             restApiName: `ImageGenerationAPI-${this.account}-${props.stageName}`,
             defaultCorsPreflightOptions: apiCorsConfig,
@@ -434,6 +487,32 @@ export class ImageGenStack extends cdk.Stack {
             endpointConfiguration: {
                 types: [apigateway.EndpointType.REGIONAL],
             },
+            deployOptions: {
+                stageName: props.stageName,
+                dataTraceEnabled: true,
+                loggingLevel: apigateway.MethodLoggingLevel.INFO,
+                accessLogDestination: new apigateway.LogGroupLogDestination(
+                    apiAccessLogGroup
+                ),
+                accessLogFormat:
+                    apigateway.AccessLogFormat.jsonWithStandardFields({
+                        caller: true,
+                        httpMethod: true,
+                        ip: true,
+                        protocol: true,
+                        requestTime: true,
+                        resourcePath: true,
+                        responseLength: true,
+                        status: true,
+                        user: true,
+                    }),
+            },
+        });
+        apiGatewayResponseTypes.forEach(({ name, type }) => {
+            api.addGatewayResponse(name, {
+                type,
+                responseHeaders: getCORSResponseParametersForAPIGateway(),
+            });
         });
         const apiDefinition = new apigateway.Model(this, "ApiDefinition", {
             restApi: api,
@@ -538,7 +617,6 @@ export class ImageGenStack extends cdk.Stack {
                     validateRequestBody: true,
                 }
             ),
-            // methodResponses: [{ statusCode: "200" }],
         });
         // GET /status/{jobId} endpoint
         const statusResource = api.root
@@ -557,12 +635,47 @@ export class ImageGenStack extends cdk.Stack {
         // POST /upload endpoint
         // Create API resource and method for getting pre-signed URLs
         const uploadUrlResource = api.root.addResource("upload");
+        const uploadRequestModel = api.addModel("UploadRequestModel", {
+            contentType: "application/json",
+            modelName: `UploadRequestModel${this.account}${props.stageName}`,
+            schema: {
+                type: apigateway.JsonSchemaType.OBJECT,
+                required: ["fileName", "fileType"],
+                properties: {
+                    fileName: {
+                        type: apigateway.JsonSchemaType.STRING,
+                        pattern: `^[a-zA-Z0-9_\\-.: ]+\\.(${ALLOWED_FILE_EXTENSIONS})$`, // Allow only certain file extensions
+                    },
+                    fileType: {
+                        type: apigateway.JsonSchemaType.STRING,
+                        enum: ALLOWED_UPLOAD_TYPES, // Only allow specific MIME types
+                    },
+                },
+            },
+        });
+        const uploadUrlMethodResponses = apiGatewayStatusCodes.map(
+            (statusCode) => ({
+                statusCode,
+                responseParameters:
+                    getCORSResponseParametersForMethodResponse(),
+            })
+        );
         const uploadUrlMethod = uploadUrlResource.addMethod(
             "POST",
             uploadUrlLambdaIntegration,
             {
-                // // No IAM auth for this endpoint to make it accessible to unauthenticated users
-                // authorizationType: apigateway.AuthorizationType.NONE,
+                requestModels: {
+                    "application/json": uploadRequestModel,
+                },
+                requestValidator: new apigateway.RequestValidator(
+                    this,
+                    `UploadRequestValidator`,
+                    {
+                        restApi: api,
+                        validateRequestBody: true,
+                    }
+                ),
+                methodResponses: uploadUrlMethodResponses,
             }
         );
 
@@ -615,7 +728,16 @@ export class ImageGenStack extends cdk.Stack {
                 effect: iam.Effect.ALLOW,
                 actions: ["execute-api:Invoke"],
                 resources: [
-                    `arn:aws:execute-api:${this.region}:${this.account}:${api.restApiId}/*/*/*`,
+                    // POST methods
+                    `arn:aws:execute-api:${this.region}:${this.account}:${api.restApiId}/${api.deploymentStage.stageName}/POST/upload`,
+                    `arn:aws:execute-api:${this.region}:${this.account}:${api.restApiId}/${api.deploymentStage.stageName}/POST/run`,
+                    // OPTIONS preflight for POST methods
+                    `arn:aws:execute-api:${this.region}:${this.account}:${api.restApiId}/${api.deploymentStage.stageName}/OPTIONS/upload`,
+                    `arn:aws:execute-api:${this.region}:${this.account}:${api.restApiId}/${api.deploymentStage.stageName}/OPTIONS/run`,
+                    // GET methods
+                    `arn:aws:execute-api:${this.region}:${this.account}:${api.restApiId}/${api.deploymentStage.stageName}/GET/status/*`,
+                    // OPTIONS preflight for GET methods
+                    `arn:aws:execute-api:${this.region}:${this.account}:${api.restApiId}/${api.deploymentStage.stageName}/OPTIONS/status/*`,
                 ],
             })
         );
@@ -625,6 +747,21 @@ export class ImageGenStack extends cdk.Stack {
                 effect: iam.Effect.ALLOW,
                 actions: ["s3:PutObject"],
                 resources: [`${inputBucket.bucketArn}/*`],
+                conditions: {
+                    // Limit max file size to 5MB
+                    NumericLessThan: {
+                        "s3:content-length": FIVE_MIB_BYTES, // 5MB
+                    },
+                    // Restrict based on content type
+                    StringLike: {
+                        "s3:content-type": ["image/png", "image/jpeg"],
+                    },
+                    // Allow unsigned payload (for pre-signed URL pattern)
+                    StringEquals: {
+                        "s3:x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+                        "s3:RequestObjectTagKeys": [],
+                    },
+                },
             })
         );
         // Set roles on identity pool
