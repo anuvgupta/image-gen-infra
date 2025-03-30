@@ -8,6 +8,7 @@
     "awsOutputBucketPrefix": "image-gen-output",
     "awsInputBucketPrefix": "image-gen-input",
     "frontendRepo": "anuvgupta/image-gen-frontend",
+    "enableFirewall": false,
     "throttlingConfig": {
         "generationTimeSeconds": 5,
         "statusPollIntervalSeconds": 2,

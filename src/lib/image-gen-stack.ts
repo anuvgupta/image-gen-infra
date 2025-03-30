@@ -24,6 +24,7 @@ interface ImageGenStackProps extends cdk.StackProps {
     awsOutputBucketPrefix: string;
     awsInputBucketPrefix: string;
     awsWebsiteBucketPrefix: string;
+    enableFirewall: boolean;
     throttlingConfig: TPSCalculationParams;
     devWebsiteUsername?: string;
     devWebsitePassword?: string;
@@ -611,83 +612,86 @@ export class ImageGenStack extends cdk.Stack {
 
         /* API GATEWAY - IP-LEVEL THROTTLING */
         // Create WAF Firewall Web ACL with IP-based rate limiting
-        const wafIPRateLimit = new wafv2.CfnWebACL(this, "APIWafIPRateLimit", {
-            defaultAction: { allow: {} },
-            scope: "REGIONAL",
-            name: `ImageGenAPIWaf-${props.stageName}`,
-            visibilityConfig: {
-                cloudWatchMetricsEnabled: true,
-                metricName: "ImageGenAPIWafMetrics",
-                sampledRequestsEnabled: true,
-            },
-            rules: [
-                {
-                    name: "IPRateLimitRun",
-                    priority: 1,
-                    statement: {
-                        rateBasedStatement: {
-                            limit: apiLimits.limits.ipRunLimit,
-                            aggregateKeyType: "IP",
-                            scopeDownStatement: {
-                                byteMatchStatement: {
-                                    fieldToMatch: {
-                                        uriPath: {},
+        let wafIPRateLimit, wafAssociation;
+        if (props.enableFirewall) {
+            wafIPRateLimit = new wafv2.CfnWebACL(this, "APIWafIPRateLimit", {
+                defaultAction: { allow: {} },
+                scope: "REGIONAL",
+                name: `ImageGenAPIWaf-${props.stageName}`,
+                visibilityConfig: {
+                    cloudWatchMetricsEnabled: true,
+                    metricName: "ImageGenAPIWafMetrics",
+                    sampledRequestsEnabled: true,
+                },
+                rules: [
+                    {
+                        name: "IPRateLimitRun",
+                        priority: 1,
+                        statement: {
+                            rateBasedStatement: {
+                                limit: apiLimits.limits.ipRunLimit,
+                                aggregateKeyType: "IP",
+                                scopeDownStatement: {
+                                    byteMatchStatement: {
+                                        fieldToMatch: {
+                                            uriPath: {},
+                                        },
+                                        positionalConstraint: "ENDS_WITH",
+                                        searchString: "/run",
+                                        textTransformations: [
+                                            { priority: 1, type: "NONE" },
+                                        ],
                                     },
-                                    positionalConstraint: "ENDS_WITH",
-                                    searchString: "/run",
-                                    textTransformations: [
-                                        { priority: 1, type: "NONE" },
-                                    ],
                                 },
                             },
                         },
+                        visibilityConfig: {
+                            cloudWatchMetricsEnabled: true,
+                            metricName: "IPRateLimitRun",
+                            sampledRequestsEnabled: true,
+                        },
+                        action: { block: {} },
                     },
-                    visibilityConfig: {
-                        cloudWatchMetricsEnabled: true,
-                        metricName: "IPRateLimitRun",
-                        sampledRequestsEnabled: true,
-                    },
-                    action: { block: {} },
-                },
-                {
-                    name: "IPRateLimitStatus",
-                    priority: 2,
-                    statement: {
-                        rateBasedStatement: {
-                            limit: apiLimits.limits.ipStatusLimit,
-                            aggregateKeyType: "IP",
-                            scopeDownStatement: {
-                                byteMatchStatement: {
-                                    fieldToMatch: {
-                                        uriPath: {},
+                    {
+                        name: "IPRateLimitStatus",
+                        priority: 2,
+                        statement: {
+                            rateBasedStatement: {
+                                limit: apiLimits.limits.ipStatusLimit,
+                                aggregateKeyType: "IP",
+                                scopeDownStatement: {
+                                    byteMatchStatement: {
+                                        fieldToMatch: {
+                                            uriPath: {},
+                                        },
+                                        positionalConstraint: "CONTAINS",
+                                        searchString: "/status/",
+                                        textTransformations: [
+                                            { priority: 1, type: "NONE" },
+                                        ],
                                     },
-                                    positionalConstraint: "CONTAINS",
-                                    searchString: "/status/",
-                                    textTransformations: [
-                                        { priority: 1, type: "NONE" },
-                                    ],
                                 },
                             },
                         },
+                        visibilityConfig: {
+                            cloudWatchMetricsEnabled: true,
+                            metricName: "IPRateLimitStatus",
+                            sampledRequestsEnabled: true,
+                        },
+                        action: { block: {} },
                     },
-                    visibilityConfig: {
-                        cloudWatchMetricsEnabled: true,
-                        metricName: "IPRateLimitStatus",
-                        sampledRequestsEnabled: true,
-                    },
-                    action: { block: {} },
-                },
-            ],
-        });
-        // Associate WAF Firewall with API Gateway stage
-        const wafAssociation = new wafv2.CfnWebACLAssociation(
-            this,
-            "WafAssociation",
-            {
-                resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${api.restApiId}/stages/${api.deploymentStage.stageName}`,
-                webAclArn: wafIPRateLimit.attrArn,
-            }
-        );
+                ],
+            });
+            // Associate WAF Firewall with API Gateway stage
+            wafAssociation = new wafv2.CfnWebACLAssociation(
+                this,
+                "WafAssociation",
+                {
+                    resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${api.restApiId}/stages/${api.deploymentStage.stageName}`,
+                    webAclArn: wafIPRateLimit.attrArn,
+                }
+            );
+        }
 
         /* STACK OUTPUTS */
         new cdk.CfnOutput(this, "CertificateValidationRecords", {
@@ -733,7 +737,10 @@ export class ImageGenStack extends cdk.Stack {
                 "ID of the Cognito Identity Pool for frontend authentication",
         });
         new cdk.CfnOutput(this, "WafWebACLArn", {
-            value: wafIPRateLimit.attrArn,
+            value:
+                props.enableFirewall && wafIPRateLimit
+                    ? wafIPRateLimit.attrArn
+                    : "N/A (Firewall not enabled)",
             description: "ARN of the WAF Web ACL for IP-based rate limiting",
         });
         new cdk.CfnOutput(this, "InputBucketName", {
