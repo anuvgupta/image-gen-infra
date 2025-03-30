@@ -1,9 +1,12 @@
 // image-gen.stack.ts
 
+import * as path from "path";
 import * as cdk from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as nodejs from "aws-cdk-lib/aws-lambda-nodejs";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as cr from "aws-cdk-lib/custom-resources";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
@@ -33,6 +36,9 @@ interface ImageGenStackProps extends cdk.StackProps {
 export class ImageGenStack extends cdk.Stack {
     constructor(scope: Construct, id: string, props: ImageGenStackProps) {
         super(scope, id, props);
+
+        /* CONSTANTS */
+        const allowedOrigins = [`https://${props.domainName}`];
 
         /* SSL CERTIFICATES - CUSTOM DOMAINS */
         // Create SSL certificate for the domain
@@ -83,6 +89,18 @@ export class ImageGenStack extends cdk.Stack {
                     expiredObjectDeleteMarker: true,
                 },
             ],
+        });
+        // CORS for uploads
+        inputBucket.addCorsRule({
+            allowedMethods: [
+                s3.HttpMethods.PUT,
+                // s3.HttpMethods.GET,
+                // s3.HttpMethods.HEAD,
+            ],
+            allowedOrigins: allowedOrigins,
+            allowedHeaders: ["*"],
+            exposedHeaders: ["ETag"],
+            maxAge: 3000,
         });
 
         /* S3 BUCKETS - OUTPUT BUCKET */
@@ -357,9 +375,8 @@ export class ImageGenStack extends cdk.Stack {
         );
 
         /* API GATEWAY - CORS */
-        const apiAllowedOrigins = [`https://${props.domainName}`];
         const apiCorsConfig = {
-            allowOrigins: apiAllowedOrigins,
+            allowOrigins: allowedOrigins,
             allowMethods: ["GET", "POST"],
             allowHeaders: [
                 "Content-Type",
@@ -371,6 +388,41 @@ export class ImageGenStack extends cdk.Stack {
             ],
             allowCredentials: true,
         };
+
+        /* API GATEWAY - UPLOAD URL LAMBDA */
+        // Create Lambda function for generating pre-signed URLs
+        const uploadUrlLambda = new nodejs.NodejsFunction(
+            this,
+            "UploadUrlLambda",
+            {
+                runtime: lambda.Runtime.NODEJS_18_X,
+                code: lambda.Code.fromAsset(
+                    path.join(__dirname, "../lambdas/get-upload-url")
+                ),
+                handler: "main.handler",
+                environment: {
+                    S3_BUCKET_NAME: inputBucket.bucketName,
+                },
+                bundling: {
+                    minify: true,
+                    sourceMap: true,
+                    forceDockerBundling: true, // Force Docker bundling
+                    nodeModules: [
+                        "@aws-sdk/client-s3",
+                        "@aws-sdk/s3-request-presigner",
+                    ],
+                },
+                timeout: cdk.Duration.seconds(10),
+            }
+        );
+        // Grant the Lambda permissions to generate pre-signed URLs for the input bucket
+        uploadUrlLambda.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: ["s3:PutObject"],
+                resources: [`${inputBucket.bucketArn}/*`],
+                effect: iam.Effect.ALLOW,
+            })
+        );
 
         /* API GATEWAY - DEFINITION */
         const api = new apigateway.RestApi(this, "ImageGenApi", {
@@ -407,7 +459,7 @@ export class ImageGenStack extends cdk.Stack {
             },
         });
 
-        /* API GATEWAY - RUNPODS INTEGRATION */
+        /* API GATEWAY - INTEGRATIONS */
         const runpodsRunIntegration = new apigateway.HttpIntegration(
             `${props.runpodsEndpoint}/run`,
             {
@@ -436,6 +488,9 @@ export class ImageGenStack extends cdk.Stack {
                     },
                 },
             }
+        );
+        const uploadUrlLambdaIntegration = new apigateway.LambdaIntegration(
+            uploadUrlLambda
         );
 
         /* API GATEWAY - REQUEST HANDLERS */
@@ -497,6 +552,17 @@ export class ImageGenStack extends cdk.Stack {
                     "method.request.path.jobId": true,
                 },
                 // methodResponses: [{ statusCode: "200" }],
+            }
+        );
+        // POST /upload endpoint
+        // Create API resource and method for getting pre-signed URLs
+        const uploadUrlResource = api.root.addResource("upload");
+        const uploadUrlMethod = uploadUrlResource.addMethod(
+            "POST",
+            uploadUrlLambdaIntegration,
+            {
+                // // No IAM auth for this endpoint to make it accessible to unauthenticated users
+                // authorizationType: apigateway.AuthorizationType.NONE,
             }
         );
 
@@ -607,6 +673,13 @@ export class ImageGenStack extends cdk.Stack {
                         burstLimit: apiLimits.limits.statusTPSBurst,
                     },
                 },
+                {
+                    method: uploadUrlMethod,
+                    throttle: {
+                        rateLimit: apiLimits.limits.runTPS,
+                        burstLimit: apiLimits.limits.runTPSBurst,
+                    },
+                },
             ],
         });
 
@@ -676,6 +749,34 @@ export class ImageGenStack extends cdk.Stack {
                         visibilityConfig: {
                             cloudWatchMetricsEnabled: true,
                             metricName: "IPRateLimitStatus",
+                            sampledRequestsEnabled: true,
+                        },
+                        action: { block: {} },
+                    },
+                    {
+                        name: "IPRateLimitUpload",
+                        priority: 3,
+                        statement: {
+                            rateBasedStatement: {
+                                limit: apiLimits.limits.ipRunLimit,
+                                aggregateKeyType: "IP",
+                                scopeDownStatement: {
+                                    byteMatchStatement: {
+                                        fieldToMatch: {
+                                            uriPath: {},
+                                        },
+                                        positionalConstraint: "ENDS_WITH",
+                                        searchString: "/upload",
+                                        textTransformations: [
+                                            { priority: 1, type: "NONE" },
+                                        ],
+                                    },
+                                },
+                            },
+                        },
+                        visibilityConfig: {
+                            cloudWatchMetricsEnabled: true,
+                            metricName: "IPRateLimitRun",
                             sampledRequestsEnabled: true,
                         },
                         action: { block: {} },
