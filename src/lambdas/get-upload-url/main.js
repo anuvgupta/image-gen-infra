@@ -59,7 +59,7 @@ exports.handler = async (event) => {
         }
 
         // Create a unique file key with a folder structure
-        const fileKey = `uploads/${Date.now()}-${fileName}`;
+        const fileKey = `${Date.now()}-${fileName}`;
 
         // Set up pre-signed URL parameters
         const postParams = {
