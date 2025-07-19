@@ -58,7 +58,6 @@ export class ImageGenStack extends cdk.Stack {
             "https://localhost:8080",
             "https://localhost:8443",
         ];
-        const allowedOriginsProd = [`https://${props.domainName}`];
         const allowedOriginsProd = [
             `https://${props.domainName}`,
             ...(props.secondaryDomainName
