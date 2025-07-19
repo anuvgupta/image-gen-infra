@@ -1,4 +1,4 @@
-// lambdas/get-upload-url-lambda.js
+// lambdas/get-upload-url/main.js
 
 // Using AWS SDK v3
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");

@@ -1,6 +1,8 @@
 {
     "domainName": "images.anuv.me",
     "apiDomainName": "images-api.anuv.me",
+    "secondaryDomainName": "sketchy.sh",
+    "secondaryApiDomainName": "api.sketchy.sh",
     "runpodsEndpoint": "https://api.runpod.ai/v2/dwnuhmsa3bqb22",
     "stackNamePrefix": "image-gen",
     "awsAccountId": "738123590383",
