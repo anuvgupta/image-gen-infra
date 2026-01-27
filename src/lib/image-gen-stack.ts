@@ -13,6 +13,8 @@ import * as cr from "aws-cdk-lib/custom-resources";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import * as route53 from "aws-cdk-lib/aws-route53";
+import * as targets from "aws-cdk-lib/aws-route53-targets";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 
@@ -30,6 +32,8 @@ interface ImageGenStackProps extends cdk.StackProps {
     apiDomainName: string;
     secondaryDomainName?: string;
     secondaryApiDomainName?: string;
+    secondaryDomainNameHostedZone?: string;
+    primaryHostedZone: string;
     runpodsApiKey: string;
     runpodsEndpoint: string;
     awsOutputBucketPrefix: string;
@@ -68,21 +72,58 @@ export class ImageGenStack extends cdk.Stack {
             props.stageName === "dev" ? allowedOriginsDev : allowedOriginsProd;
         const allowedOrigin = allowedOrigins[0];
 
+        /* ROUTE 53 - CUSTOM DOMAIN HOSTED ZONES */
+        const primaryHostedZone = route53.HostedZone.fromLookup(
+            this,
+            "PrimaryHostedZone",
+            {
+                domainName: props.primaryHostedZone, // Lookup existing hosted zone
+            }
+        );
+        let secondaryHostedZone;
+        if (props.secondaryDomainNameHostedZone) {
+            secondaryHostedZone =
+                props.stageName === "dev"
+                    ? new route53.HostedZone(this, "SecondaryHostedZone", {
+                          zoneName: props.secondaryDomainNameHostedZone,
+                      })
+                    : route53.HostedZone.fromLookup(
+                          this,
+                          "SecondaryHostedZone",
+                          {
+                              domainName: props.secondaryDomainNameHostedZone,
+                          }
+                      );
+        }
+
         /* SSL CERTIFICATES - CUSTOM DOMAINS */
-        // Create SSL certificate for the domain
         const websiteCertificate = new acm.Certificate(this, "Certificate", {
-            domainName: props.domainName,
+            domainName: props.domainName, // images-dev.anuv.me
             subjectAlternativeNames: props.secondaryDomainName
-                ? [props.secondaryDomainName]
+                ? [props.secondaryDomainName] // dev.sketchy.sh
                 : undefined,
-            validation: acm.CertificateValidation.fromDns(),
+            validation: acm.CertificateValidation.fromDnsMultiZone({
+                [props.domainName]: primaryHostedZone, // existing anuv.me zone
+                ...(props.secondaryDomainName && secondaryHostedZone
+                    ? {
+                          [props.secondaryDomainName]: secondaryHostedZone, // new sketchy.sh zone
+                      }
+                    : {}),
+            }),
         });
         const apiCertificate = new acm.Certificate(this, "ApiCertificate", {
-            domainName: props.apiDomainName,
+            domainName: props.apiDomainName, // images-api-dev.anuv.me
             subjectAlternativeNames: props.secondaryApiDomainName
-                ? [props.secondaryApiDomainName]
+                ? [props.secondaryApiDomainName] // api-dev.sketchy.sh
                 : undefined,
-            validation: acm.CertificateValidation.fromDns(),
+            validation: acm.CertificateValidation.fromDnsMultiZone({
+                [props.apiDomainName]: primaryHostedZone, // existing anuv.me zone
+                ...(props.secondaryApiDomainName && secondaryHostedZone
+                    ? {
+                          [props.secondaryApiDomainName]: secondaryHostedZone, // new sketchy.sh zone
+                      }
+                    : {}),
+            }),
         });
 
         /* S3 BUCKETS - WEBSITE BUCKET */
@@ -750,6 +791,45 @@ export class ImageGenStack extends cdk.Stack {
             });
         }
 
+        /* ROUTE 53 - DNS RECORDS */
+        // Primary domain records (existing anuv.me zone)
+        new route53.ARecord(this, "PrimaryWebsiteAliasRecord", {
+            zone: primaryHostedZone,
+            recordName: props.domainName, // images-dev.anuv.me or images.anuv.me
+            target: route53.RecordTarget.fromAlias(
+                new targets.CloudFrontTarget(distribution)
+            ),
+        });
+        new route53.ARecord(this, "PrimaryApiAliasRecord", {
+            zone: primaryHostedZone,
+            recordName: props.apiDomainName, // images-api-dev.anuv.me or images-api.anuv.me
+            target: route53.RecordTarget.fromAlias(
+                new targets.ApiGatewayDomain(apiCustomDomain)
+            ),
+        });
+        // Secondary domain records (sketchy.sh zone)
+        if (
+            props.secondaryDomainName &&
+            props.secondaryApiDomainName &&
+            secondaryHostedZone &&
+            secondaryApiCustomDomain
+        ) {
+            new route53.ARecord(this, "SecondaryWebsiteAliasRecord", {
+                zone: secondaryHostedZone,
+                recordName: props.secondaryDomainName, // dev.sketchy.sh or sketchy.sh
+                target: route53.RecordTarget.fromAlias(
+                    new targets.CloudFrontTarget(distribution)
+                ),
+            });
+            new route53.ARecord(this, "SecondaryApiAliasRecord", {
+                zone: secondaryHostedZone,
+                recordName: props.secondaryApiDomainName, // api-dev.sketchy.sh or api.sketchy.sh
+                target: route53.RecordTarget.fromAlias(
+                    new targets.ApiGatewayDomain(secondaryApiCustomDomain)
+                ),
+            });
+        }
+
         /* API GATEWAY - GUEST ACCESS */
         // Secure the API with Cognito
         const identityPool = new cognito.CfnIdentityPool(
@@ -984,44 +1064,36 @@ export class ImageGenStack extends cdk.Stack {
         }
 
         /* STACK OUTPUTS */
-        new cdk.CfnOutput(this, "CertificateValidationRecords", {
+        new cdk.CfnOutput(this, "HostedZoneInfo", {
             value:
-                "IMPORTANT!! Check Certificate Manager in AWS Console for DNS validation records to add to external DNS provider ie. Namecheap, GoDaddy, Yandex. " +
-                "Initial stack deployment won't complete until the DNS is updated & propagates (which takes a while).",
-            description:
-                "DNS records needed for website SSL certificate validation",
+                props.stageName === "dev" && secondaryHostedZone
+                    ? `Primary hosted zone: ${props.primaryHostedZone} (existing). Secondary hosted zone: ${props.secondaryDomainNameHostedZone} (created - configure nameservers at domain registrar).`
+                    : `Primary hosted zone: ${props.primaryHostedZone} (existing). DNS records automatically created in Route 53.`,
+            description: "Hosted zone configuration",
         });
-        new cdk.CfnOutput(this, "ApiCertificateValidationRecords", {
-            value:
-                "IMPORTANT!! Check Certificate Manager for DNS validation records for images-api-dev.anuv.me to add to external DNS provider ie. Namecheap, GoDaddy, Yandex. " +
-                "Initial stack deployment won't complete until the DNS is updated & propagates (which takes a while).",
-            description:
-                "DNS records needed for API SSL certificate validation",
-        });
-        new cdk.CfnOutput(this, "CloudFrontDomainSetup", {
-            value: `DNS Record:\nDomain: ${props.domainName}\nType: CNAME\nTarget: ${distribution.distributionDomainName}`,
-            description:
-                "CloudFront Domain CNAME record to add in external DNS provider ie. Namecheap, GoDaddy, Yandex",
-        });
-        new cdk.CfnOutput(this, "ApiDomainSetup", {
-            value: `DNS Record:\nDomain: ${props.apiDomainName}\nType: CNAME\nTarget: ${apiCustomDomain.domainNameAliasDomainName}`,
-            description:
-                "API Gateway Domain CNAME record to add in external DNS provider ie. Namecheap, GoDaddy, Yandex",
-        });
-        if (props.secondaryDomainName) {
-            new cdk.CfnOutput(this, "SecondaryCloudFrontDomainSetup", {
-                value: `DNS Record:\nDomain: ${props.secondaryDomainName}\nType: CNAME\nTarget: ${distribution.distributionDomainName}`,
+        if (
+            props.stageName === "dev" &&
+            secondaryHostedZone &&
+            props.secondaryDomainNameHostedZone
+        ) {
+            new cdk.CfnOutput(this, "SecondaryHostedZoneNameservers", {
+                value:
+                    "IMPORTANT!! Configure these nameservers at your domain registrar (e.g., Namecheap, GoDaddy) for " +
+                    props.secondaryDomainNameHostedZone +
+                    ". Check Route 53 console for the NS records.",
                 description:
-                    "Secondary CloudFront Domain CNAME record to add in external DNS provider",
+                    "Nameservers for the secondary hosted zone (sketchy.sh)",
             });
         }
-        if (props.secondaryApiDomainName && secondaryApiCustomDomain) {
-            new cdk.CfnOutput(this, "SecondaryApiDomainSetup", {
-                value: `DNS Record:\nDomain: ${props.secondaryApiDomainName}\nType: CNAME\nTarget: ${secondaryApiCustomDomain.domainNameAliasDomainName}`,
-                description:
-                    "Secondary API Gateway Domain CNAME record to add in external DNS provider",
-            });
-        }
+        new cdk.CfnOutput(this, "DnsRecordsStatus", {
+            value:
+                "DNS A records automatically created in Route 53 hosted zones. " +
+                `${props.domainName} and ${props.apiDomainName} created in ${props.primaryHostedZone} zone. ` +
+                (props.secondaryDomainName && props.secondaryApiDomainName
+                    ? `${props.secondaryDomainName} and ${props.secondaryApiDomainName} created in ${props.secondaryDomainNameHostedZone} zone.`
+                    : ""),
+            description: "DNS records configuration status",
+        })
         new cdk.CfnOutput(this, "CloudFrontDistributionId", {
             value: distribution.distributionId,
             description: "CloudFront Distribution ID",
