@@ -12,10 +12,14 @@ const MAX_FILE_SIZE = FIVE_MIB_BYTES;
 const s3Client = new S3Client({ region: process.env.AWS_REGION });
 
 exports.handler = async (event) => {
-    const allowedOrigin = process.env.ALLOWED_ORIGIN || "*";
-    const getCorsHeaders = (allowedOrigin) => {
+    const allowedOrigins = (process.env.ALLOWED_ORIGINS || "*").split(",");
+    const requestOrigin = event.headers?.origin || event.headers?.Origin || "";
+    const matchedOrigin = allowedOrigins.includes(requestOrigin)
+        ? requestOrigin
+        : allowedOrigins[0];
+    const getCorsHeaders = (origin) => {
         return {
-            "Access-Control-Allow-Origin": `${allowedOrigin}`,
+            "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Headers":
                 "Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,x-amz-content-sha256",
             "Access-Control-Allow-Methods": "POST,OPTIONS",
@@ -35,7 +39,7 @@ exports.handler = async (event) => {
                 statusCode: 400,
                 headers: {
                     "Content-Type": "application/json",
-                    ...getCorsHeaders(allowedOrigin),
+                    ...getCorsHeaders(matchedOrigin),
                 },
                 body: JSON.stringify({
                     error: "fileName and fileType are required",
@@ -48,7 +52,7 @@ exports.handler = async (event) => {
                 statusCode: 400,
                 headers: {
                     "Content-Type": "application/json",
-                    ...getCorsHeaders(allowedOrigin),
+                    ...getCorsHeaders(matchedOrigin),
                 },
                 body: JSON.stringify({
                     error: `Invalid file type. Allowed types: ${ALLOWED_FILE_TYPES.join(
@@ -82,7 +86,7 @@ exports.handler = async (event) => {
             statusCode: 200,
             headers: {
                 "Content-Type": "application/json",
-                ...getCorsHeaders(allowedOrigin),
+                ...getCorsHeaders(matchedOrigin),
             },
             body: JSON.stringify({
                 url,
@@ -97,7 +101,7 @@ exports.handler = async (event) => {
             statusCode: 500,
             headers: {
                 "Content-Type": "application/json",
-                ...getCorsHeaders(allowedOrigin),
+                ...getCorsHeaders(matchedOrigin),
             },
             body: JSON.stringify({
                 error: "Failed to generate upload URL",

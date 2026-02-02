@@ -173,7 +173,7 @@ export class ImageGenStack extends cdk.Stack {
                 // s3.HttpMethods.GET,
                 // s3.HttpMethods.HEAD,
             ],
-            allowedOrigins: [allowedOrigin],
+            allowedOrigins: allowedOrigins,
             allowedHeaders: ["*"],
             exposedHeaders: ["ETag"],
             maxAge: 3000,
@@ -468,7 +468,7 @@ export class ImageGenStack extends cdk.Stack {
                 handler: "main.handler",
                 environment: {
                     S3_BUCKET_NAME: inputBucket.bucketName,
-                    ALLOWED_ORIGIN: allowedOrigin,
+                    ALLOWED_ORIGINS: allowedOrigins.join(","),
                 },
                 bundling: {
                     minify: true,
@@ -493,7 +493,7 @@ export class ImageGenStack extends cdk.Stack {
 
         /* API GATEWAY - CORS CONFIG */
         const apiCorsConfig = {
-            allowOrigins: [allowedOrigin],
+            allowOrigins: allowedOrigins,
             allowMethods: ["GET", "POST"],
             allowHeaders: [
                 "Content-Type",
